@@ -37,8 +37,8 @@ type ServerSelector interface {
 
 // ServerList is a simple ServerSelector. Its zero value is usable.
 type ServerList struct {
-	mu    sync.RWMutex
-	addrs []net.Addr
+	mu        sync.RWMutex
+	addresses []net.Addr
 }
 
 // staticAddr caches the Network() and String() values from any net.Addr.
@@ -66,26 +66,26 @@ func (s *staticAddr) String() string  { return s.str }
 // resolve. No attempt is made to connect to the server. If any error
 // is returned, no changes are made to the ServerList.
 func (ss *ServerList) SetServers(servers ...string) error {
-	naddr := make([]net.Addr, len(servers))
+	nAddress := make([]net.Addr, len(servers))
 	for i, server := range servers {
 		if strings.Contains(server, "/") {
 			addr, err := net.ResolveUnixAddr("unix", server)
 			if err != nil {
 				return err
 			}
-			naddr[i] = newStaticAddr(addr)
+			nAddress[i] = newStaticAddr(addr)
 		} else {
-			tcpaddr, err := net.ResolveTCPAddr("tcp", server)
+			tcpAddress, err := net.ResolveTCPAddr("tcp", server)
 			if err != nil {
 				return err
 			}
-			naddr[i] = newStaticAddr(tcpaddr)
+			nAddress[i] = newStaticAddr(tcpAddress)
 		}
 	}
 
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
-	ss.addrs = naddr
+	ss.addresses = nAddress
 	return nil
 }
 
@@ -93,7 +93,7 @@ func (ss *ServerList) SetServers(servers ...string) error {
 func (ss *ServerList) Each(f func(net.Addr) error) error {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
-	for _, a := range ss.addrs {
+	for _, a := range ss.addresses {
 		if err := f(a); nil != err {
 			return err
 		}
@@ -111,19 +111,22 @@ var keyBufPool = sync.Pool{
 	},
 }
 
+// PickServer uses constant hash to select a server for the item. This is a technique used in distributed systems to distribute data across
+// a cluster of nodes in a way that minimizes reorganization when nodes are added or removed.
 func (ss *ServerList) PickServer(key string) (net.Addr, error) {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
-	if len(ss.addrs) == 0 {
+	if len(ss.addresses) == 0 {
 		return nil, ErrNoServers
 	}
-	if len(ss.addrs) == 1 {
-		return ss.addrs[0], nil
-	}
-	bufp := keyBufPool.Get().(*[]byte)
-	n := copy(*bufp, key)
-	cs := crc32.ChecksumIEEE((*bufp)[:n])
-	keyBufPool.Put(bufp)
 
-	return ss.addrs[cs%uint32(len(ss.addrs))], nil
+	if len(ss.addresses) == 1 {
+		return ss.addresses[0], nil
+	}
+
+	bufP := keyBufPool.Get().(*[]byte)
+	n := copy(*bufP, key)
+	cs := crc32.ChecksumIEEE((*bufP)[:n])
+	keyBufPool.Put(bufP)
+	return ss.addresses[cs%uint32(len(ss.addresses))], nil
 }
