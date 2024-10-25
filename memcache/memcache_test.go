@@ -22,10 +22,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
@@ -46,8 +46,8 @@ func TestLocalhost(t *testing.T) {
 	if err != nil {
 		t.Skipf("skipping test; no server running at %s", localhostTCPAddr)
 	}
-	io.WriteString(c, "flush_all\r\n")
-	c.Close()
+	_, _ = io.WriteString(c, "flush_all\r\n")
+	_ = c.Close()
 
 	testWithClient(t, New(localhostTCPAddr))
 }
@@ -61,8 +61,12 @@ func TestUnixSocket(t *testing.T) {
 		t.Skipf("skipping test; couldn't find memcached")
 		return
 	}
-	defer cmd.Wait()
-	defer cmd.Process.Kill()
+	defer func() {
+		_ = cmd.Wait()
+	}()
+	defer func() {
+		_ = cmd.Process.Kill()
+	}()
 
 	// Wait a bit for the socket to appear.
 	for i := 0; i < 10; i++ {
@@ -82,7 +86,9 @@ func TestFakeServer(t *testing.T) {
 		t.Fatalf("failed to listen: %v", err)
 	}
 	t.Logf("running test server on %s", ln.Addr())
-	defer ln.Close()
+	defer func() {
+		_ = ln.Close()
+	}()
 	srv := &testServer{}
 	go srv.Serve(ln)
 
@@ -94,7 +100,7 @@ func TestTLS(t *testing.T) {
 	td := t.TempDir()
 
 	// Test whether our memcached binary has TLS support. We --enable-ssl first,
-	// before --version, as memcached evaluates the flags in the order provided
+	// before --version, as memcached evaluates the flags in the order provided,
 	// and we want it to fail if it's built without TLS support (as it is in
 	// Debian, but not Ubuntu or Homebrew).
 	out, err := exec.Command("memcached", "--enable-ssl", "--version").CombinedOutput()
@@ -103,11 +109,11 @@ func TestTLS(t *testing.T) {
 	}
 	t.Logf("version: %s", bytes.TrimSpace(out))
 
-	if err := os.WriteFile(filepath.Join(td, "/cert.pem"), LocalhostCert, 0644); err != nil {
-		t.Fatal(err)
+	if errWriteFile := os.WriteFile(filepath.Join(td, "/cert.pem"), LocalhostCert, 0644); errWriteFile != nil {
+		t.Fatal(errWriteFile)
 	}
-	if err := os.WriteFile(filepath.Join(td, "/key.pem"), LocalhostKey, 0644); err != nil {
-		t.Fatal(err)
+	if errWriteFilePem := os.WriteFile(filepath.Join(td, "/key.pem"), LocalhostKey, 0644); errWriteFilePem != nil {
+		t.Fatal(errWriteFilePem)
 	}
 
 	// Find some unused port. This is racy but we hope for the best and hope the kernel
@@ -117,7 +123,7 @@ func TestTLS(t *testing.T) {
 		t.Fatalf("failed to listen: %v", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
+	_ = ln.Close()
 
 	cmd := exec.Command("memcached",
 		"--port="+strconv.Itoa(port),
@@ -133,15 +139,19 @@ func TestTLS(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start memcached: %v", err)
 	}
-	defer cmd.Wait()
-	defer cmd.Process.Kill()
+	defer func() {
+		_ = cmd.Wait()
+	}()
+	defer func() {
+		_ = cmd.Process.Kill()
+	}()
 
 	// Wait a bit for the server to be running.
 	for i := 0; i < 10; i++ {
-		nc, err := net.Dial("tcp", "localhost:"+strconv.Itoa(port))
-		if err == nil {
+		nc, errDial := net.Dial("tcp", "localhost:"+strconv.Itoa(port))
+		if errDial == nil {
 			t.Logf("localhost:%d is up.", port)
-			nc.Close()
+			_ = nc.Close()
 			break
 		}
 		t.Logf("waiting for localhost:%d to be up...", port)
@@ -196,8 +206,8 @@ func testWithClient(t *testing.T, c *Client) {
 	err = c.CompareAndSwap(it)
 	checkErr(err, "cas(foo): %v", err)
 	it0.Value = []byte("should-fail")
-	if err := c.CompareAndSwap(it0); err != ErrCASConflict {
-		t.Fatalf("cas(foo) error = %v; want ErrCASConflict", err)
+	if errCompareSwap := c.CompareAndSwap(it0); !errors.Is(errCompareSwap, ErrCASConflict) {
+		t.Fatalf("cas(foo) error = %v; want ErrCASConflict", errCompareSwap)
 	}
 
 	// Get
@@ -230,12 +240,12 @@ func testWithClient(t *testing.T, c *Client) {
 	// Set malformed keys
 	malFormed := &Item{Key: "foo bar", Value: []byte("foobarval")}
 	err = c.Set(malFormed)
-	if err != ErrMalformedKey {
+	if !errors.Is(err, ErrMalformedKey) {
 		t.Errorf("set(foo bar) should return ErrMalformedKey instead of %v", err)
 	}
 	malFormed = &Item{Key: "foo" + string(rune(0x7f)), Value: []byte("foobarval")}
 	err = c.Set(malFormed)
-	if err != ErrMalformedKey {
+	if !errors.Is(err, ErrMalformedKey) {
 		t.Errorf("set(foo<0x7f>) should return ErrMalformedKey instead of %v", err)
 	}
 
@@ -243,30 +253,30 @@ func testWithClient(t *testing.T, c *Client) {
 	bar := &Item{Key: "bar", Value: []byte("barval")}
 	err = c.Add(bar)
 	checkErr(err, "first add(foo): %v", err)
-	if err := c.Add(bar); err != ErrNotStored {
-		t.Fatalf("second add(foo) want ErrNotStored, got %v", err)
+	if errAdd := c.Add(bar); !errors.Is(errAdd, ErrNotStored) {
+		t.Fatalf("second add(foo) want ErrNotStored, got %v", errAdd)
 	}
 
 	// Append
-	append := &Item{Key: "append", Value: []byte("appendval")}
-	if err := c.Append(append); err != ErrNotStored {
-		t.Fatalf("first append(append) want ErrNotStored, got %v", err)
+	item := &Item{Key: "item", Value: []byte("appendval")}
+	if errAppend := c.Append(item); !errors.Is(errAppend, ErrNotStored) {
+		t.Fatalf("first item(item) want ErrNotStored, got %v", errAppend)
 	}
-	c.Set(append)
-	err = c.Append(&Item{Key: "append", Value: []byte("1")})
-	checkErr(err, "second append(append): %v", err)
-	appended, err := c.Get("append")
-	checkErr(err, "third append(append): %v", err)
-	if string(appended.Value) != string(append.Value)+"1" {
+	_ = c.Set(item)
+	err = c.Append(&Item{Key: "item", Value: []byte("1")})
+	checkErr(err, "second item(item): %v", err)
+	appended, err := c.Get("item")
+	checkErr(err, "third item(item): %v", err)
+	if string(appended.Value) != string(item.Value)+"1" {
 		t.Fatalf("Append: want=append1, got=%s", string(appended.Value))
 	}
 
 	// Prepend
 	prepend := &Item{Key: "prepend", Value: []byte("prependval")}
-	if err := c.Prepend(prepend); err != ErrNotStored {
-		t.Fatalf("first prepend(prepend) want ErrNotStored, got %v", err)
+	if errPrepend := c.Prepend(prepend); !errors.Is(errPrepend, ErrNotStored) {
+		t.Fatalf("first prepend(prepend) want ErrNotStored, got %v", errPrepend)
 	}
-	c.Set(prepend)
+	_ = c.Set(prepend)
 	err = c.Prepend(&Item{Key: "prepend", Value: []byte("1")})
 	checkErr(err, "second prepend(prepend): %v", err)
 	prepended, err := c.Get("prepend")
@@ -277,8 +287,8 @@ func testWithClient(t *testing.T, c *Client) {
 
 	// Replace
 	baz := &Item{Key: "baz", Value: []byte("bazvalue")}
-	if err := c.Replace(baz); err != ErrNotStored {
-		t.Fatalf("expected replace(baz) to return ErrNotStored, got %v", err)
+	if errReplace := c.Replace(baz); !errors.Is(errReplace, ErrNotStored) {
+		t.Fatalf("expected replace(baz) to return ErrNotStored, got %v", errReplace)
 	}
 	err = c.Replace(bar)
 	checkErr(err, "replaced(foo): %v", err)
@@ -306,7 +316,7 @@ func testWithClient(t *testing.T, c *Client) {
 	err = c.Delete("foo")
 	checkErr(err, "Delete: %v", err)
 	it, err = c.Get("foo")
-	if err != ErrCacheMiss {
+	if !errors.Is(err, ErrCacheMiss) {
 		t.Errorf("post-Delete want ErrCacheMiss, got %v", err)
 	}
 
@@ -325,7 +335,7 @@ func testWithClient(t *testing.T, c *Client) {
 	err = c.Delete("num")
 	checkErr(err, "delete num: %v", err)
 	n, err = c.Increment("num", 1)
-	if err != ErrCacheMiss {
+	if !errors.Is(err, ErrCacheMiss) {
 		t.Fatalf("increment post-delete: want ErrCacheMiss, got %v", err)
 	}
 	mustSet(&Item{Key: "num", Value: []byte("not-numeric")})
@@ -339,7 +349,7 @@ func testWithClient(t *testing.T, c *Client) {
 	err = c.DeleteAll()
 	checkErr(err, "DeleteAll: %v", err)
 	it, err = c.Get("bar")
-	if err != ErrCacheMiss {
+	if !errors.Is(err, ErrCacheMiss) {
 		t.Errorf("post-DeleteAll want ErrCacheMiss, got %v", err)
 	}
 
@@ -378,7 +388,7 @@ func testTouchWithClient(t *testing.T, c *Client) {
 
 	_, err := c.Get("foo")
 	if err != nil {
-		if err == ErrCacheMiss {
+		if errors.Is(err, ErrCacheMiss) {
 			t.Fatalf("touching failed to keep item foo alive")
 		} else {
 			t.Fatalf("unexpected error retrieving foo after touching: %v", err.Error())
@@ -389,7 +399,7 @@ func testTouchWithClient(t *testing.T, c *Client) {
 	if err == nil {
 		t.Fatalf("item bar did not expire within %v seconds", time.Now().Sub(setTime).Seconds())
 	} else {
-		if err != ErrCacheMiss {
+		if !errors.Is(err, ErrCacheMiss) {
 			t.Fatalf("unexpected error retrieving bar: %v", err.Error())
 		}
 	}
@@ -400,11 +410,13 @@ func BenchmarkOnItem(b *testing.B) {
 	if err != nil {
 		b.Fatal("Could not open fake server: ", err)
 	}
-	defer fakeServer.Close()
+	defer func() {
+		_ = fakeServer.Close()
+	}()
 	go func() {
 		for {
 			if c, err := fakeServer.Accept(); err == nil {
-				go func() { io.Copy(ioutil.Discard, c) }()
+				go func() { _, _ = io.Copy(io.Discard, c) }()
 			} else {
 				return
 			}
@@ -421,6 +433,6 @@ func BenchmarkOnItem(b *testing.B) {
 	dummyFn := func(_ *Client, _ *bufio.ReadWriter, _ *Item) error { return nil }
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		c.onItem(&item, dummyFn)
+		_ = c.onItem(&item, dummyFn)
 	}
 }

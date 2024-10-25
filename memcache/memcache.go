@@ -48,12 +48,6 @@ var (
 	// CompareAndSwap) failed because the condition was not satisfied.
 	ErrNotStored = errors.New("memcache: item not stored")
 
-	// ErrServer means that a server error occurred.
-	ErrServerError = errors.New("memcache: server error")
-
-	// ErrNoStats means that no statistics were available.
-	ErrNoStats = errors.New("memcache: no statistics available")
-
 	// ErrMalformedKey is returned when an invalid key is used.
 	// Keys must be at maximum 250 bytes long and not
 	// contain whitespace or control characters.
@@ -75,7 +69,7 @@ const (
 const buffered = 8 // arbitrary buffered channel size, for readability
 
 // resumableError returns true if err is only a protocol-level cache error.
-// This is used to determine whether or not a server connection should
+// This is used to determine whether a server connection should
 // be re-used or not. If an error occurs, by default we don't reuse the
 // connection, unless it was just a cache error.
 func resumableError(err error) bool {
@@ -120,7 +114,7 @@ var (
 // it gets a proportional amount of weight.
 func New(server ...string) *Client {
 	ss := new(ServerList)
-	ss.SetServers(server...)
+	_ = ss.SetServers(server...)
 	return NewFromSelector(ss)
 }
 
@@ -155,7 +149,7 @@ type Client struct {
 	selector ServerSelector
 
 	lk       sync.Mutex
-	freeconn map[string][]*conn
+	freeConn map[string][]*conn
 }
 
 // Item is an item to be got or stored in a memcached server.
@@ -196,7 +190,7 @@ func (cn *conn) release() {
 }
 
 func (cn *conn) extendDeadline() {
-	cn.nc.SetDeadline(time.Now().Add(cn.c.netTimeout()))
+	_ = cn.nc.SetDeadline(time.Now().Add(cn.c.netTimeout()))
 }
 
 // condRelease releases this connection if the error pointed to by err
@@ -207,36 +201,36 @@ func (cn *conn) condRelease(err *error) {
 	if *err == nil || resumableError(*err) {
 		cn.release()
 	} else {
-		cn.nc.Close()
+		_ = cn.nc.Close()
 	}
 }
 
 func (c *Client) putFreeConn(addr net.Addr, cn *conn) {
 	c.lk.Lock()
 	defer c.lk.Unlock()
-	if c.freeconn == nil {
-		c.freeconn = make(map[string][]*conn)
+	if c.freeConn == nil {
+		c.freeConn = make(map[string][]*conn)
 	}
-	freelist := c.freeconn[addr.String()]
+	freelist := c.freeConn[addr.String()]
 	if len(freelist) >= c.maxIdleConns() {
-		cn.nc.Close()
+		_ = cn.nc.Close()
 		return
 	}
-	c.freeconn[addr.String()] = append(freelist, cn)
+	c.freeConn[addr.String()] = append(freelist, cn)
 }
 
 func (c *Client) getFreeConn(addr net.Addr) (cn *conn, ok bool) {
 	c.lk.Lock()
 	defer c.lk.Unlock()
-	if c.freeconn == nil {
+	if c.freeConn == nil {
 		return nil, false
 	}
-	freelist, ok := c.freeconn[addr.String()]
+	freelist, ok := c.freeConn[addr.String()]
 	if !ok || len(freelist) == 0 {
 		return nil, false
 	}
 	cn = freelist[len(freelist)-1]
-	c.freeconn[addr.String()] = freelist[:len(freelist)-1]
+	c.freeConn[addr.String()] = freelist[:len(freelist)-1]
 	return cn, true
 }
 
@@ -282,7 +276,8 @@ func (c *Client) dial(addr net.Addr) (net.Conn, error) {
 		return nc, nil
 	}
 
-	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
 		return nil, &ConnectTimeoutError{addr}
 	}
 
@@ -492,10 +487,10 @@ func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
 	}
 
 	ch := make(chan error, buffered)
-	for addr, keys := range keyMap {
+	for addr, mKeys := range keyMap {
 		go func(addr net.Addr, keys []string) {
 			ch <- c.getFromAddr(addr, keys, addItemToMap)
-		}(addr, keys)
+		}(addr, mKeys)
 	}
 
 	var err error
@@ -630,22 +625,28 @@ func (c *Client) populateOne(rw *bufio.ReadWriter, verb string, item *Item) erro
 		_, err = fmt.Fprintf(rw, "%s %s %d %d %d\r\n",
 			verb, item.Key, item.Flags, item.Expiration, len(item.Value))
 	}
+
 	if err != nil {
 		return err
 	}
+
 	if _, err = rw.Write(item.Value); err != nil {
 		return err
 	}
-	if _, err := rw.Write(crlf); err != nil {
-		return err
+
+	if _, errWrite := rw.Write(crlf); errWrite != nil {
+		return errWrite
 	}
-	if err := rw.Flush(); err != nil {
-		return err
+
+	if errFlush := rw.Flush(); errFlush != nil {
+		return errFlush
 	}
+
 	line, err := rw.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
+
 	switch {
 	case bytes.Equal(line, resultStored):
 		return nil
@@ -664,8 +665,8 @@ func writeReadLine(rw *bufio.ReadWriter, format string, args ...interface{}) ([]
 	if err != nil {
 		return nil, err
 	}
-	if err := rw.Flush(); err != nil {
-		return nil, err
+	if errFlush := rw.Flush(); errFlush != nil {
+		return nil, errFlush
 	}
 	line, err := rw.ReadSlice('\n')
 	return line, err
@@ -715,7 +716,7 @@ func (c *Client) Ping() error {
 // Increment atomically increments key by delta. The return value is
 // the new value after being incremented or an error. If the value
 // didn't exist in memcached the error is ErrCacheMiss. The value in
-// memcached must be an decimal number, or an error will be returned.
+// memcached must be a decimal number, or an error will be returned.
 // On 64-bit overflow, the new value wraps around.
 func (c *Client) Increment(key string, delta uint64) (newValue uint64, err error) {
 	return c.incrDecr("incr", key, delta)
@@ -724,7 +725,7 @@ func (c *Client) Increment(key string, delta uint64) (newValue uint64, err error
 // Decrement atomically decrements key by delta. The return value is
 // the new value after being decremented or an error. If the value
 // didn't exist in memcached the error is ErrCacheMiss. The value in
-// memcached must be an decimal number, or an error will be returned.
+// memcached must be a decimal number, or an error will be returned.
 // On underflow, the new value is capped at zero and does not wrap
 // around.
 func (c *Client) Decrement(key string, delta uint64) (newValue uint64, err error) {
@@ -764,13 +765,13 @@ func (c *Client) Close() error {
 	c.lk.Lock()
 	defer c.lk.Unlock()
 	var ret error
-	for _, conns := range c.freeconn {
-		for _, c := range conns {
+	for _, connections := range c.freeConn {
+		for _, c := range connections {
 			if err := c.nc.Close(); err != nil && ret == nil {
 				ret = err
 			}
 		}
 	}
-	c.freeconn = nil
+	c.freeConn = nil
 	return ret
 }
