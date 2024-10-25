@@ -63,7 +63,9 @@ type testConn struct {
 }
 
 func (c *testConn) serve() {
-	defer c.c.Close()
+	defer func() {
+		_ = c.c.Close()
+	}()
 	c.br = bufio.NewReader(c.c)
 	c.bw = bufio.NewWriter(c.c)
 	for {
@@ -81,8 +83,8 @@ func (c *testConn) serve() {
 }
 
 func (c *testConn) reply(msg string) bool {
-	fmt.Fprintf(c.bw, "%s\r\n", msg)
-	c.bw.Flush()
+	_, _ = fmt.Fprintf(c.bw, "%s\r\n", msg)
+	_ = c.bw.Flush()
 	return true
 }
 
@@ -118,9 +120,9 @@ func (c *testConn) handleRequestLine(line string) bool {
 				delete(c.s.m, key)
 				continue
 			}
-			fmt.Fprintf(c.bw, "VALUE %s %d %d %d\r\n", key, item.flags, len(item.data), item.casUniq)
-			c.bw.Write(item.data)
-			c.bw.Write(crlf)
+			_, _ = fmt.Fprintf(c.bw, "VALUE %s %d %d %d\r\n", key, item.flags, len(item.data), item.casUniq)
+			_, _ = c.bw.Write(item.data)
+			_, _ = c.bw.Write(crlf)
 		}
 		return c.reply("END")
 	}
@@ -267,8 +269,8 @@ func (c *testConn) handleRequestLine(line string) bool {
 		item.data = []byte(strconv.FormatInt(newVal, 10))
 		c.s.m[key] = item
 		if noReply == "" {
-			fmt.Fprintf(c.bw, "%d\r\n", newVal)
-			c.bw.Flush()
+			_, _ = fmt.Fprintf(c.bw, "%d\r\n", newVal)
+			_ = c.bw.Flush()
 		}
 		return true
 	}
