@@ -1,4 +1,4 @@
-## About
+## About [![Go](https://github.com/marcsantiago/gomemcache/actions/workflows/go.yml/badge.svg)](https://github.com/marcsantiago/gomemcache/actions/workflows/go.yml)
 
 This is a memcache client library for the Go programming language
 (http://golang.org/).
