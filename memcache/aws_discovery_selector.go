@@ -159,10 +159,14 @@ func parseNodes(r *bufio.ReadWriter) ([]string, error) {
 }
 
 func (d *Discovery) PickServer(key string) (net.Addr, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	return d.serverList.PickServer(key)
 }
 
 func (d *Discovery) Each(f func(net.Addr) error) error {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	return d.serverList.Each(f)
 }
 
