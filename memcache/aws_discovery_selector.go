@@ -19,7 +19,9 @@ import (
 
 var (
 	// ErrAutoDiscover is returned when no nodes are found in the configuration.
-	ErrAutoDiscover   = errors.New("memcache: no nodes found in the configuration")
+	ErrAutoDiscover = errors.New("memcache: no nodes found in the configuration")
+	// ErrInvalidCommand is returned when the response from the configuration endpoint returns an error.
+	// This is usually because the command is not supported by the server by the endpoint provided.
 	ErrInvalidCommand = errors.New("memcache: error in response")
 )
 
